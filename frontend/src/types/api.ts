@@ -2,6 +2,7 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   role: 'admin' | 'user';
+  rsaPublicKey?: string;
   encryptedPrivateKey: string;
   privateKeySalt: string;
   privateKeyIv: string;
@@ -18,6 +19,7 @@ export interface FileRecord {
   mimeType: string;
   size: number;
   isOwner: boolean;
+  isClientEncrypted?: boolean;
 }
 
 export interface FileMetadata {
@@ -28,6 +30,7 @@ export interface FileMetadata {
   aesIv: string;
   aesAuthTag: string;
   encryptedAesKey: string;
+  isClientEncrypted?: boolean;
 }
 
 

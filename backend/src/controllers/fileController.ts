@@ -11,6 +11,7 @@ import {
 } from '../security/crypto.js';
 import { wrapKey, unwrapKey } from '../security/keyWrap.js';
 import { getGridFsBucket } from '../storage/gridfs.js';
+import { appendAuditLog } from '../security/auditChain.js';
 
 function ensureObjectId(id: string) {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -26,14 +27,76 @@ export async function uploadFile(req: Request, res: Response) {
     return res.status(400).json({ message: 'file field is required' });
   }
 
-  const aesKey = generateAesKey();
-  const mimeType = req.file.mimetype || 'application/octet-stream';
-  const encrypted = aesEncrypt(req.file.buffer, aesKey);
-  const encryptedBuffer = Buffer.from(encrypted.ciphertext, 'base64');
+  const isClientEncrypted =
+    req.body.isClientEncrypted === 'true' || req.body.isClientEncrypted === true;
+  const filename = req.body.originalFilename || req.file.originalname;
+  const mimeType = req.body.originalMimeType || req.file.mimetype || 'application/octet-stream';
+  const size = req.body.originalSize ? Number(req.body.originalSize) : req.file.size;
+
   const bucket = getGridFsBucket();
-  const uploadStream = bucket.openUploadStream(req.file.originalname, {
+  const uploadStream = bucket.openUploadStream(filename, {
     contentType: mimeType
   });
+
+  if (isClientEncrypted) {
+    // Zero-Knowledge Client-Side Encryption:
+    // req.file.buffer is already AES-256-GCM ciphertext produced in the user's browser.
+    // The server never receives the plaintext or the file's raw AES key.
+    if (!req.body.aesIv || !req.body.aesAuthTag || !req.body.encryptedAesKey) {
+      return res.status(400).json({
+        message: 'aesIv, aesAuthTag, and encryptedAesKey are required for client-encrypted files'
+      });
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      Readable.from(req.file!.buffer)
+        .pipe(uploadStream)
+        .on('error', reject)
+        .on('finish', () => resolve());
+    });
+
+    const fileDoc = await FileModel.create({
+      owner: req.user._id,
+      filename,
+      mimeType,
+      size,
+      gridFsId: uploadStream.id,
+      aesIv: req.body.aesIv,
+      aesAuthTag: req.body.aesAuthTag,
+      isClientEncrypted: true,
+      serverWrappedKey: '',
+      serverWrapIv: '',
+      serverWrapAuthTag: '',
+      acl: [
+        {
+          user: req.user._id,
+          encryptedAesKey: req.body.encryptedAesKey
+        }
+      ]
+    });
+
+    await appendAuditLog({
+      action: 'FILE_UPLOAD',
+      actorId: req.user.id,
+      actorEmail: req.user.email,
+      targetFileId: fileDoc._id,
+      targetFilename: fileDoc.filename,
+      details: { isClientEncrypted: true, size: fileDoc.size }
+    });
+
+    return res.status(201).json({
+      id: fileDoc.id,
+      filename: fileDoc.filename,
+      mimeType: fileDoc.mimeType,
+      size: fileDoc.size,
+      isClientEncrypted: true
+    });
+  }
+
+  // Fallback: server-assisted encryption (legacy / backwards compatibility)
+  const aesKey = generateAesKey();
+  const encrypted = aesEncrypt(req.file.buffer, aesKey);
+  const encryptedBuffer = Buffer.from(encrypted.ciphertext, 'base64');
   await new Promise<void>((resolve, reject) => {
     Readable.from(encryptedBuffer)
       .pipe(uploadStream)
@@ -52,6 +115,7 @@ export async function uploadFile(req: Request, res: Response) {
     gridFsId: uploadStream.id,
     aesIv: encrypted.iv,
     aesAuthTag: encrypted.authTag,
+    isClientEncrypted: false,
     serverWrappedKey: wrapped.ciphertext,
     serverWrapIv: wrapped.iv,
     serverWrapAuthTag: wrapped.authTag,
@@ -63,11 +127,21 @@ export async function uploadFile(req: Request, res: Response) {
     ]
   });
 
-  res.status(201).json({
+  await appendAuditLog({
+    action: 'FILE_UPLOAD',
+    actorId: req.user.id,
+    actorEmail: req.user.email,
+    targetFileId: fileDoc._id,
+    targetFilename: fileDoc.filename,
+    details: { isClientEncrypted: false, size: fileDoc.size }
+  });
+
+  return res.status(201).json({
     id: fileDoc.id,
     filename: fileDoc.filename,
     mimeType: fileDoc.mimeType,
-    size: fileDoc.size
+    size: fileDoc.size,
+    isClientEncrypted: false
   });
 }
 
@@ -85,7 +159,8 @@ export async function listFiles(req: Request, res: Response) {
       filename: file.filename,
       mimeType: file.mimeType,
       size: file.size,
-      isOwner: file.owner.equals(req.user!._id)
+      isOwner: file.owner.equals(req.user!._id),
+      isClientEncrypted: Boolean(file.isClientEncrypted)
     }))
   );
 }
@@ -114,7 +189,8 @@ export async function getFileMetadata(req: Request, res: Response) {
     size: file.size,
     aesIv: file.aesIv,
     aesAuthTag: file.aesAuthTag,
-    encryptedAesKey: aclEntry.encryptedAesKey
+    encryptedAesKey: aclEntry.encryptedAesKey,
+    isClientEncrypted: Boolean(file.isClientEncrypted)
   });
 }
 
@@ -147,6 +223,15 @@ export async function downloadFile(req: Request, res: Response) {
   const downloadStream = bucket.openDownloadStream(file.gridFsId);
   downloadStream.on('error', () => res.status(500).end());
   downloadStream.pipe(res);
+
+  await appendAuditLog({
+    action: 'FILE_DOWNLOAD',
+    actorId: req.user.id,
+    actorEmail: req.user.email,
+    targetFileId: file._id,
+    targetFilename: file.filename,
+    details: { isOwner: file.owner.equals(req.user._id) }
+  });
 }
 
 export async function shareFile(req: Request, res: Response) {
@@ -192,15 +277,58 @@ export async function shareFile(req: Request, res: Response) {
   if (!targetUser) {
     return res.status(404).json({ message: 'Target user not found' });
   }
-  const aesKey = unwrapKey({
-    ciphertext: file.serverWrappedKey,
-    iv: file.serverWrapIv,
-    authTag: file.serverWrapAuthTag
+
+  // Zero-Knowledge Sharing: client already encrypted the AES key with target user's RSA public key
+  if (req.body.encryptedAesKey) {
+    file.acl.push({ user: targetUser._id, encryptedAesKey: req.body.encryptedAesKey });
+    await file.save();
+
+    await appendAuditLog({
+      action: 'FILE_SHARE',
+      actorId: req.user.id,
+      actorEmail: req.user.email,
+      targetFileId: file._id,
+      targetFilename: file.filename,
+      details: {
+        recipientId: targetUser._id.toString(),
+        recipientEmail: targetUser.email,
+        isZeroKnowledge: true
+      }
+    });
+
+    return res.json({ message: 'Access granted (Zero-Knowledge)', isZeroKnowledge: true });
+  }
+
+  // Fallback: server-side unwrapping for legacy server-managed files
+  if (file.serverWrappedKey && file.serverWrapIv && file.serverWrapAuthTag) {
+    const aesKey = unwrapKey({
+      ciphertext: file.serverWrappedKey,
+      iv: file.serverWrapIv,
+      authTag: file.serverWrapAuthTag
+    });
+    const encryptedAesKey = rsaEncryptAesKey(aesKey, targetUser.rsaPublicKey);
+    file.acl.push({ user: targetUser._id, encryptedAesKey });
+    await file.save();
+
+    await appendAuditLog({
+      action: 'FILE_SHARE',
+      actorId: req.user.id,
+      actorEmail: req.user.email,
+      targetFileId: file._id,
+      targetFilename: file.filename,
+      details: {
+        recipientId: targetUser._id.toString(),
+        recipientEmail: targetUser.email,
+        isZeroKnowledge: false
+      }
+    });
+
+    return res.json({ message: 'Access granted', isZeroKnowledge: false });
+  }
+
+  return res.status(400).json({
+    message: 'This file is Zero-Knowledge encrypted. Client must provide encryptedAesKey for recipient.'
   });
-  const encryptedAesKey = rsaEncryptAesKey(aesKey, targetUser.rsaPublicKey);
-  file.acl.push({ user: targetUser._id, encryptedAesKey });
-  await file.save();
-  res.json({ message: 'Access granted' });
 }
 
 

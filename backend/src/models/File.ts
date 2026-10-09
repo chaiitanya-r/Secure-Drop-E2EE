@@ -13,9 +13,10 @@ export interface IFile extends Document {
   gridFsId: Types.ObjectId;
   aesIv: string;
   aesAuthTag: string;
-  serverWrappedKey: string;
-  serverWrapIv: string;
-  serverWrapAuthTag: string;
+  isClientEncrypted?: boolean;
+  serverWrappedKey?: string;
+  serverWrapIv?: string;
+  serverWrapAuthTag?: string;
   acl: IFileAclEntry[];
 }
 
@@ -36,9 +37,10 @@ const fileSchema = new Schema<IFile>(
     gridFsId: { type: Schema.Types.ObjectId, required: true },
     aesIv: { type: String, required: true },
     aesAuthTag: { type: String, required: true },
-    serverWrappedKey: { type: String, required: true },
-    serverWrapIv: { type: String, required: true },
-    serverWrapAuthTag: { type: String, required: true },
+    isClientEncrypted: { type: Boolean, default: false },
+    serverWrappedKey: { type: String, default: '' },
+    serverWrapIv: { type: String, default: '' },
+    serverWrapAuthTag: { type: String, default: '' },
     acl: { type: [fileAclSchema], default: [] }
   },
   { timestamps: true }

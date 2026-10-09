@@ -8,6 +8,11 @@ import {
   shareFile,
   uploadFile
 } from '../controllers/fileController.js';
+import {
+  createEphemeralLink,
+  listFileEphemeralLinks,
+  revokeEphemeralLink
+} from '../controllers/ephemeralController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { validateBody } from '../middleware/validate.js';
 import { shareSchema } from '../validators/fileSchemas.js';
@@ -25,6 +30,11 @@ router.post('/upload', upload.single('file'), uploadFile);
 router.get('/:fileId', getFileMetadata);
 router.get('/:fileId/download', downloadFile);
 router.post('/:fileId/share', validateBody(shareSchema), shareFile);
+
+// Ephemeral Link management routes (Authenticated)
+router.post('/:fileId/ephemeral-link', createEphemeralLink);
+router.get('/:fileId/ephemeral-links', listFileEphemeralLinks);
+router.delete('/:fileId/ephemeral-links/:linkId', revokeEphemeralLink);
 
 export const filesRouter = router;
 

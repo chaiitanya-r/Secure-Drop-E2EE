@@ -4,7 +4,6 @@
     "module": "ESNext",
     "moduleResolution": "Node",
     "outDir": "dist",
-    "rootDir": "src",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
@@ -13,8 +12,6 @@
     "types": ["node", "jest"],
     "typeRoots": ["./src/types", "./node_modules/@types"]
   },
-  "include": ["src"],
-  "exclude": ["node_modules", "dist", "tests"]
+  "include": ["src", "tests"],
+  "exclude": ["node_modules", "dist"]
 }
-
-

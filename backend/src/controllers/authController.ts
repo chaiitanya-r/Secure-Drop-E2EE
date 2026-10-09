@@ -34,10 +34,12 @@ export async function register(req: Request, res: Response) {
   const token = signJwt({ sub: user.id, role: user.role });
   res.status(201).json({
     token,
+    email: user.email,
     user: {
       id: user.id,
       email: user.email,
       role: user.role,
+      rsaPublicKey: user.rsaPublicKey,
       encryptedPrivateKey: user.encryptedPrivateKey,
       privateKeySalt: user.privateKeySalt,
       privateKeyIv: user.privateKeyIv
@@ -64,6 +66,7 @@ export async function login(req: Request, res: Response) {
       id: user.id,
       email: user.email,
       role: user.role,
+      rsaPublicKey: user.rsaPublicKey,
       encryptedPrivateKey: user.encryptedPrivateKey,
       privateKeySalt: user.privateKeySalt,
       privateKeyIv: user.privateKeyIv
@@ -80,6 +83,22 @@ export async function me(req: Request, res: Response) {
     email: req.user.email,
     role: req.user.role,
     rsaPublicKey: req.user.rsaPublicKey
+  });
+}
+
+export async function getPublicKeyByEmail(req: Request, res: Response) {
+  const email = (req.query.email as string)?.toLowerCase();
+  if (!email) {
+    return res.status(400).json({ message: 'email query parameter is required' });
+  }
+  const user = await User.findOne({ email }).select('id email rsaPublicKey');
+  if (!user) {
+    return res.status(404).json({ message: 'User not found' });
+  }
+  res.json({
+    id: user.id,
+    email: user.email,
+    rsaPublicKey: user.rsaPublicKey
   });
 }
 

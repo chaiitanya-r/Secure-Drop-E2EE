@@ -36,10 +36,12 @@ export async function apiFetch<T>(
 
 export async function apiFetchBinary(
   path: string,
-  token: string
+  token?: string | null
 ): Promise<ArrayBuffer> {
   const headers = new Headers();
-  headers.set('Authorization', `Bearer ${token}`);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
 
   const res = await fetch(`${API_BASE}${path}`, { headers });
   if (!res.ok) {

@@ -15,4 +15,12 @@ export function registerRequest(email: string, password: string) {
   });
 }
 
+export function fetchCurrentUser(token: string) {
+  return apiFetch<{ id: string; email: string; role: 'admin' | 'user'; rsaPublicKey: string }>(
+    '/api/auth/me',
+    { method: 'GET' },
+    token
+  );
+}
+
 

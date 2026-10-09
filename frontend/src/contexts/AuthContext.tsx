@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { loginRequest, registerRequest } from '../api/auth';
+import { loginRequest, registerRequest, fetchCurrentUser } from '../api/auth';
 import type { AuthenticatedUser, LoginResponse } from '../types/api';
 
 interface EncryptedPrivateKeyPayload {
@@ -44,6 +44,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     stored?.encrypted || null
   );
   const [unlockedPrivateKey, setUnlockedPrivateKey] = useState<CryptoKey | null>(null);
+
+  useEffect(() => {
+    if (token && user && !user.rsaPublicKey) {
+      fetchCurrentUser(token)
+        .then((profile) => {
+          setUser((prev) => (prev ? { ...prev, rsaPublicKey: profile.rsaPublicKey } : null));
+        })
+        .catch(() => {});
+    }
+  }, [token, user]);
 
   useEffect(() => {
     if (token && user && encryptedPrivateKey) {
